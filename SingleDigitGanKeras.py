@@ -10,32 +10,34 @@ from tensorflow import keras
 from tensorflow.keras import layers
 from tensorflow.keras.datasets import mnist
 
-import numpy as np
 import matplotlib.pyplot as plt
 
 import os
-os.environ["KMP_DUPLICATE_LIB_OK"]=""
+os.environ["KMP_DUPLICATE_LIB_OK"]= "True"
 
 #%% Global Variables
 
 # variables about real image (RI)
-datadim = [28,28] # RI pixel dimension
-datalen = datadim[0]*datadim[1] #total number of pixels
-realImageNum = 3 # drawn number number in pixel image
-quantity = 2 # number real images
+DATADIM = [28,28] # RI pixel dimension
+DATALEN = DATADIM[0]*DATADIM[1] #total number of pixels
+REALIMAGENUM = 3 # drawn number
 
 # Network Variables
-learningRate = 0.25 #training learningRate
-DisLayers = [datalen, 1] # Network Layout of Discriminator
-GenLayers = [1, 5, datalen] # Network Layout of Generator
+LEARNINGRATE = 0.001 #training learningRate
+BATCHSIZE = 32
+
+# GAN Variables
+DISLAYERS = [DATALEN, 1] # Network Layout of Discriminator
+GENLAYERS = [1, 5, DATALEN] # Network Layout of Generator
 
 # Output Variables
-numIterations = 500 # number of training epochs conducted
-plotMods = [1, 2, 5] # defines which images are plotted (MSD of each power of 10)
+NUMITERATIONS = 500 # number of training epochs conducted
+
+# Plotting Variables
+PLOTMODS = [1, 2, 5] # defines which images are plotted (MSD of each power of 10)
 
 # Random Seed
 tf.random.set_seed(20)
-np.random.seed(20)
 
 
 #%% Plotting
@@ -101,129 +103,68 @@ def PlotDim(n):
 
 #%% obtain real data
 
-class RealImageGenerator():
-    def __init__(self, name = None):
-        
-        (self.x_train, self.y_train), (self.x_test, self.y_test) = tf.keras.datasets.mnist.load_data()
-        
-        self.x_train = self.x_train.reshape(60000,-1).astype("float32") /255
-        self.x_test = self.x_test.reshape(10000,-1).astype("float32") /255
+def GenRealImages(num, BatchSize):
+    (x_train, y_train), (x_test, y_test) = mnist.load_data()
     
-    def getSingleNumImages(self, num, quantity, isTrain):
-        self.Images = []
-        self.ImageValues = []
-        
-        if isTrain:
-            DataQuantity = 60000
-            ImageData = self.x_train
-            NumData = self.y_train
-        else:
-            DataQuantity = 10000
-            ImageData = self.x_test
-            NumData = self.y_test
-        
-        count = 0
-        idx = list(range(DataQuantity))
-        
-        for i in idx:
-            if (NumData[i] == num):
-                self.Images.append([ImageData[i].numpy()])
-                self.ImageValues.append([NumData[i].numpy()])
-                count +=1
-                if (count == quantity):
-                    return self.Images
-                
+    x_train = x_train.reshape(-1, DATALEN).astype("float32") / 255
+    x_test = x_test.reshape(-1, DATALEN).astype("float32") / 255
+    
+    trainData = []
+    testData = []
+    
+    for idx, data in enumerate(x_train):
+        if y_train[idx] == num:
+            trainData.append(data)
+    trainDataLen = len(trainData) - (len(trainData) % BatchSize)
+    
+    for idx, data in enumerate(x_test):
+        if y_test[idx] == num:
+            testData.append(data)
+    testDataLen = len(testData) - (len(testData) % BatchSize)
+    
+    return [tf.random.shuffle(tf.constant(trainData[0:trainDataLen])), tf.random.shuffle(tf.constant(testData[0:testDataLen]))]
 
-#%% Discriminator
+#%% Create a network model
 
-class Discriminator():
-    def __init__(self, LayerSequence, name = None):
+def CreateModel(LayerSequence, name):
+    model = keras.Sequential(name = name)
+    
+    model.add(keras.Input(shape = LayerSequence[0]))
+    
+    for layer in LayerSequence[1:-1]:
+        model.add(layers.Dense(layer, activation = "relu"))
         
-        #define discriminator model
-        self.model = keras.Sequential()
-        
-        #add the input
-        self.model.add(keras.Input(shape = LayerSequence[0]))
-        
-        #add the internal layers
-        for layer in LayerSequence[0:-1]:
-            self.model.add(layers.Dense(layer, activation = 'relu'))
-            
-        #add the output layer
-        self.model.add(layers.Dense(LayerSequence[-1], activation = 'softmax'))
-        
-        #print the model layer structure
-        print(self.model.summary())
-        #keras.utils.plot_model(self.model, "Discirminator Model.png", show_shapes=True)
-        
-        # define the training parameters for the model
-        self.model.compile(
-            loss = keras.losses.SparseCategoricalCrossentropy(from_logits = False),
-            optimizer = keras.optimizers.Adam(lr = 0.001),
-            metrics = ["accuracy"],
-        )
-        
-#%% Generator
+    model.add(layers.Dense(LayerSequence[-1], activation = "sigmoid"))
+    
+    return model
 
-class Generator():
-    def __init__(self, LayerSequence, name = None):
-        
-        # define the model inputs
-        inputs = keras.Input(shape = LayerSequence[0])
-        
-        # create the model internal layers
-        modelLayer = inputs
 
-        for layer in LayerSequence[1:-1]:
-            modelLayer = layers.Dense(layer, activation = 'relu')(modelLayer)
-        
-        #define the model outputs
-        outputs = layers.Dense(LayerSequence[-1], activation = 'softmax')(modelLayer)
-        
-        # create the generator model
-        self.model = keras.Model(inputs = inputs, outputs = outputs)
-        
-        #print the model later structure
-        print(self.model.summary())
-        #keras.utils.plot_model(self.model, "Generator Model.png", show_shapes=True)
-        
-        # define the training parameters
-        self.model.compile(
-            loss = keras.losses.SparseCategoricalCrossentropy(from_logits = False),
-            optimizer = keras.optimizers.Adam(lr = 0.001),
-            metrics = ["accuracy"],
-        )
-        
-        
-#%% main
+#%% Main
 
 def main():
-    Data = RealImageGenerator()
+    [trainData, testData] = GenRealImages(REALIMAGENUM, BATCHSIZE)
     
-    Dis = Discriminator(DisLayers)
+    DiscModel = CreateModel(DISLAYERS, "Discrimator")
+    GenModel = CreateModel(GENLAYERS, "Generator")
     
-    Gen = Generator(GenLayers)
+    DiscModel.summary()
+    GenModel.summary()
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     
 main()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
